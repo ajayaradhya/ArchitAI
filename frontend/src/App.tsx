@@ -13,6 +13,7 @@ function App() {
   return (
     <Router>
       <Navbar />
+      <div className="h-16" />
       <Box sx={{ flex: 1, minHeight: "80vh" }}>
         <Routes>
           <Route path="/" element={<HomePage />} />
