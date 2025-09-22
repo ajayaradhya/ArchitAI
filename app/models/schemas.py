@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 class QuestionResponse(BaseModel):
     topic: str
@@ -43,3 +43,11 @@ class FinalizeResponse(BaseModel):
     tech_stack: List[str]
     integration_steps: List[str]
     rationale: str
+
+class SessionDetailResponse(BaseModel):
+    session_id: str
+    prompt: str
+    questions: List[str]
+    answers: List[dict]
+    status: str
+    final_design: Optional[dict] = None

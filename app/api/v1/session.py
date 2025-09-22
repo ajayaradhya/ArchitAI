@@ -7,6 +7,7 @@ from app.models.schemas import (
     FinalizeResponse,
     SessionCreateRequest,
     SessionCreateResponse,
+    SessionDetailResponse,
     SessionReplyRequest,
     SessionReplyResponse,
 )
@@ -119,3 +120,33 @@ async def finalize_session(session_id: str = Path(..., description="ID of the se
     await database.execute(update_query)
 
     return MOCK_FINAL_DESIGN
+
+
+@router.get("/", response_model=List[SessionCreateResponse])
+async def list_sessions():
+    query = sessions.select()
+    all_sessions = await database.fetch_all(query)
+    result = [
+        SessionCreateResponse(
+            session_id=s["id"],
+            questions=s["questions"] if s["status"] == SessionStatus.in_progress else []
+        )
+        for s in all_sessions
+    ]
+    return result
+
+@router.get("/{session_id}", response_model=SessionDetailResponse)
+async def get_session(session_id: str = Path(..., description="ID of the session")):
+    query = sessions.select().where(sessions.c.id == session_id)
+    session = await database.fetch_one(query)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return SessionDetailResponse(
+        session_id=session["id"],
+        prompt=session["prompt"],
+        questions=session["questions"],
+        answers=session["answers"],
+        status=session["status"],
+        final_design=session.get("final_design"),
+    )
