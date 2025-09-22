@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+// import { useRef, useEffect } from "react";
 import MessageBubble from "../components/MessageBubble";
 
 // Reuse the same type as in AppPage
@@ -19,13 +19,13 @@ const ConversationWindow: React.FC<Props> = ({
   typing,
   onDownload,
 }) => {
-  const endRef = useRef<HTMLDivElement | null>(null);
+//   const endRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (conversation.length > 0) {
-      endRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [conversation, typing]);
+//   useEffect(() => {
+//     if (conversation.length > 0) {
+//       endRef.current?.scrollIntoView({ behavior: "smooth" });
+//     }
+//   }, [conversation, typing]);
 
   return (
     <div className="flex-1 flex flex-col space-y-4 overflow-y-auto p-4">
@@ -38,8 +38,8 @@ const ConversationWindow: React.FC<Props> = ({
           ArchitAI is typing...
         </div>
       )}
-
-      <div ref={endRef} />
+{/* 
+      <div ref={endRef} /> */}
     </div>
   );
 };
