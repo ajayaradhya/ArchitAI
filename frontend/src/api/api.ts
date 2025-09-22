@@ -16,6 +16,7 @@ export interface SessionCreateResponse {
 export interface SessionReplyResponse {
   next_questions: string[];
   status: "in_progress" | "ready_to_finalize";
+  reply: string;
 }
 
 export interface FinalizeResponse {
@@ -26,4 +27,6 @@ export interface FinalizeResponse {
   tech_stack: string[];
   integration_steps: string[];
   rationale: string;
+  diagram_url?: string; // make it optional
 }
+

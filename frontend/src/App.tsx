@@ -1,162 +1,315 @@
-import { useState, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { FC } from "react";
 import api from "./api/api";
-import type { 
-  SessionCreateResponse, 
-  SessionReplyResponse, 
-  FinalizeResponse 
-} from "./api/api";
+import type { SessionCreateResponse, SessionReplyResponse, FinalizeResponse } from "./api/api";
+import {
+  Container,
+  Box,
+  Typography,
+  TextField,
+  Button,
+  Paper,
+  Stack,
+  CircularProgress,
+} from "@mui/material";
 
+// -------------------------
+// App Component
+// -------------------------
 const App: FC = () => {
   const [prompt, setPrompt] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [questions, setQuestions] = useState<string[]>([]);
-  const [conversation, setConversation] = useState<{role: "user"|"architai", text: string}[]>([]);
-  const [finalDesign, setFinalDesign] = useState<FinalizeResponse | null>(null);
+  const [conversation, setConversation] = useState<
+    { role: "user" | "architai" | "finalDesign"; text?: string; diagram_url?: string }[]
+  >([]);
   const [loading, setLoading] = useState(false);
+  const [typing, setTyping] = useState(false);
 
+  const conversationEndRef = useRef<HTMLDivElement | null>(null);
+
+  // Auto-scroll to bottom whenever conversation changes
+  useEffect(() => {
+    conversationEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [conversation, typing]);
+
+  // Dynamic tab title
+  useEffect(() => {
+    if (conversation.find((c) => c.role === "finalDesign")) {
+      document.title = "Final Design – ArchitAI";
+    } else if (sessionId) {
+      document.title = "Conversation – ArchitAI";
+    } else {
+      document.title = "ArchitAI";
+    }
+  }, [sessionId, conversation]);
+
+  // Dynamic favicon
+  useEffect(() => {
+    const favicon = document.getElementById("favicon") as HTMLLinkElement | null;
+    if (!favicon) return;
+    if (typing) {
+      favicon.href = "/favicon-typing.ico"; // you can add a typing favicon in public folder
+    } else {
+      favicon.href = "/favicon.ico"; // default favicon
+    }
+  }, [typing]);
+
+  // -------------------------
+  // Start a new session
+  // -------------------------
   const startSession = async () => {
-    if (!prompt) return;
+    if (!prompt.trim()) return;
     setLoading(true);
+    setTyping(true);
     try {
       const res = await api.post<SessionCreateResponse>("/session", { prompt });
       setSessionId(res.data.session_id);
-      setQuestions(res.data.questions);
-      setConversation([{ role: "user", text: prompt }]);
+
+      const firstQuestion = res.data.questions[0];
+      if (firstQuestion) {
+        setConversation((prev) => [
+          ...prev,
+          { role: "user", text: prompt },
+          { role: "architai", text: firstQuestion },
+        ]);
+      } else {
+        setConversation((prev) => [...prev, { role: "user", text: prompt }]);
+      }
+
+      setQuestions(res.data.questions.slice(1));
+      setPrompt(""); // clear input
     } catch (err) {
       console.error("Failed to start session:", err);
     } finally {
       setLoading(false);
+      setTyping(false);
     }
   };
 
+  // -------------------------
+  // Answer a question
+  // -------------------------
   const answerQuestion = async (answer: string) => {
     if (!sessionId) return;
     setLoading(true);
+    setTyping(true);
     try {
-      const res = await api.post<SessionReplyResponse>(`/session/${sessionId}/reply`, { answer });
-      const nextQs = res.data.next_questions;
+      setConversation((prev) => [...prev, { role: "user", text: answer }]);
 
-      // Add ArchitAI question & user answer to conversation
-      setConversation(prev => [
-        ...prev,
-        { role: "architai", text: questions[0] },
-        { role: "user", text: answer }
-      ]);
+      if (questions.length === 0) {
+        const res = await api.post<SessionReplyResponse>(`/session/${sessionId}/reply`, { answer });
+        const nextQuestion = res.data.next_questions[0];
+        if (nextQuestion) {
+          setConversation((prev) => [...prev, { role: "architai", text: nextQuestion }]);
+          setQuestions(res.data.next_questions.slice(1));
+        }
 
-      setQuestions(nextQs);
-      if (res.data.status === "ready_to_finalize") {
-        const finalRes = await api.post<FinalizeResponse>(`/session/${sessionId}/finalize`);
-        setFinalDesign(finalRes.data);
+        if (res.data.status === "ready_to_finalize") {
+          const finalRes = await api.post<FinalizeResponse>(`/session/${sessionId}/finalize`);
+          setConversation((prev) => [
+            ...prev,
+            { role: "finalDesign", diagram_url: finalRes.data.diagram_url },
+          ]);
+        }
+      } else {
+        const nextQuestion = questions[0];
+        setConversation((prev) => [...prev, { role: "architai", text: nextQuestion }]);
+        setQuestions(questions.slice(1));
       }
     } catch (err) {
       console.error("Failed to answer question:", err);
     } finally {
       setLoading(false);
+      setTyping(false);
     }
   };
 
+  const resetApp = () => {
+    setPrompt("");
+    setSessionId(null);
+    setQuestions([]);
+    setConversation([]);
+    setLoading(false);
+    setTyping(false);
+  };
+
   return (
-    <div className="min-h-screen bg-background-light dark:bg-background-dark font-display text-gray-800 dark:text-gray-200 flex flex-col">
-      <header className="bg-background-light/80 dark:bg-background-dark/80 sticky top-0 z-10 border-b border-gray-200 dark:border-gray-800 p-4">
-        <h1 className="text-xl font-bold text-gray-900 dark:text-white">ArchitAI</h1>
-      </header>
-      <main className="flex-grow container mx-auto px-4 py-8 max-w-3xl">
-        {!sessionId && !finalDesign && (
-          <div className="space-y-4">
-            <p className="text-lg text-gray-700 dark:text-gray-300">
+    <Box sx={{ minHeight: "100vh", display: "flex", flexDirection: "column", bgcolor: "background.default", color: "text.primary" }}>
+      {/* Header */}
+      <Box
+        component="header"
+        sx={{
+          position: "sticky",
+          top: 0,
+          zIndex: 10,
+          bgcolor: "background.paper",
+          borderBottom: 1,
+          borderColor: "divider",
+          py: 2,
+        }}
+      >
+        <Container
+          maxWidth="lg"
+          sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+        >
+          <Typography variant="h5" fontWeight={700}>
+            ArchitAI
+          </Typography>
+          {sessionId ? (
+            <Button variant="outlined" color="primary" onClick={resetApp}>
+              Home
+            </Button>
+          ) : (
+            <Button variant="contained" color="primary" onClick={startSession} disabled={loading}>
+              {loading ? <CircularProgress size={24} /> : "Get Started"}
+            </Button>
+          )}
+        </Container>
+      </Box>
+
+      {/* Main */}
+      <Container
+        maxWidth="lg"
+        sx={{ py: 6, flexGrow: 1, display: "flex", flexDirection: "column", alignItems: "center" }}
+      >
+        {/* Initial Prompt */}
+        {!sessionId && (
+          <Paper sx={{ p: 4, maxWidth: 700, width: "100%" }} elevation={3}>
+            <Typography variant="body1" sx={{ mb: 3 }}>
               Enter a system design idea and ArchitAI will guide you through a conversation to generate the final diagram.
-            </p>
-            <div className="flex gap-2">
-              <input
-                type="text"
+            </Typography>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+              <TextField
+                fullWidth
+                multiline
+                minRows={2}
+                variant="outlined"
                 placeholder="Describe your system design"
-                className="flex-1 rounded-lg border-none bg-white/90 dark:bg-background-dark/90 focus:ring-2 focus:ring-primary p-3"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    startSession();
+                  }
+                }}
               />
-              <button
-                className="bg-primary text-white font-bold py-3 px-6 rounded-lg hover:bg-primary/90"
+              <Button
+                variant="contained"
+                color="primary"
                 onClick={startSession}
                 disabled={loading}
+                sx={{ minWidth: 140 }}
               >
-                {loading ? "Starting..." : "Generate"}
-              </button>
-            </div>
-          </div>
+                {loading ? <CircularProgress size={24} /> : "Generate"}
+              </Button>
+            </Stack>
+          </Paper>
         )}
 
-        {sessionId && !finalDesign && (
-          <div className="mt-8 space-y-4">
-            {conversation.map((msg, idx) => (
-              <div
-                key={idx}
-                className={`flex items-start gap-3 ${
-                  msg.role === "user" ? "justify-end" : "justify-start"
-                }`}
-              >
-                {msg.role === "architai" && (
-                  <div className="bg-gray-200 dark:bg-gray-700/50 p-3 rounded-lg rounded-tl-none max-w-xs">
-                    <p className="text-sm text-gray-800 dark:text-gray-200">{msg.text}</p>
-                  </div>
-                )}
-                {msg.role === "user" && (
-                  <div className="bg-primary text-white p-3 rounded-lg rounded-tr-none max-w-xs">
-                    <p className="text-sm">{msg.text}</p>
-                  </div>
-                )}
-              </div>
-            ))}
+        {/* Conversation */}
+        {sessionId && (
+          <Stack spacing={2} sx={{ width: "100%", maxWidth: 700, maxHeight: 600, overflowY: "auto", mt: 4 }}>
+            {conversation.map((msg, idx) => {
+              if (msg.role === "finalDesign") {
+                return (
+                  <Box key={idx} sx={{ display: "flex", justifyContent: "center", mt: 2 }}>
+                    <Paper sx={{ p: 2, borderRadius: 3, bgcolor: "grey.100", width: "100%" }} elevation={2}>
+                      <Box sx={{ width: "100%", aspectRatio: "3/2", overflow: "hidden", borderRadius: 2 }}>
+                        <img
+                          src={msg.diagram_url ?? "https://via.placeholder.com/600x400"}
+                          alt="Generated system design diagram"
+                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                        />
+                      </Box>
+                      <Box sx={{ textAlign: "center", mt: 2 }}>
+                        <Button variant="contained" color="primary">
+                          Download Diagram
+                        </Button>
+                      </Box>
+                    </Paper>
+                  </Box>
+                );
+              }
 
-            {questions.length > 0 && (
-              <AnswerInput onSubmit={answerQuestion} loading={loading} />
+              return (
+                <Box
+                  key={idx}
+                  sx={{
+                    display: "flex",
+                    justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
+                  }}
+                >
+                  <Stack spacing={0.5} alignItems={msg.role === "user" ? "flex-end" : "flex-start"}>
+                    <Typography variant="caption" color="text.secondary" sx={{ textTransform: "capitalize" }}>
+                      {msg.role}
+                    </Typography>
+                    <Box
+                      sx={{
+                        p: 2,
+                        borderRadius: 2,
+                        bgcolor: msg.role === "user" ? "primary.main" : "grey.300",
+                        color: msg.role === "user" ? "primary.contrastText" : "text.primary",
+                        borderTopRightRadius: msg.role === "user" ? 0 : 8,
+                        borderTopLeftRadius: msg.role === "architai" ? 0 : 8,
+                        maxWidth: 400,
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {msg.text}
+                    </Box>
+                  </Stack>
+                </Box>
+              );
+            })}
+            {typing && (
+              <Typography variant="body2" color="text.secondary">
+                ArchitAI is typing...
+              </Typography>
             )}
-          </div>
+            <AnswerInput onSubmit={answerQuestion} loading={loading} />
+            <div ref={conversationEndRef} />
+          </Stack>
         )}
-
-        {finalDesign && (
-          <div className="mt-8">
-            <h2 className="text-2xl font-bold mb-4">Final Design</h2>
-            <div className="bg-gray-100 dark:bg-background-dark/50 rounded-xl p-4">
-              <pre className="whitespace-pre-wrap">{JSON.stringify(finalDesign, null, 2)}</pre>
-            </div>
-            <button className="bg-primary text-white font-bold text-base py-3 px-8 rounded-lg hover:bg-primary/90 mt-4 inline-flex items-center gap-2">
-              Download Diagram
-            </button>
-          </div>
-        )}
-      </main>
-    </div>
+      </Container>
+    </Box>
   );
 };
 
 // -------------------------
-// Answer input component
+// Answer Input Component
 // -------------------------
 const AnswerInput: FC<{ onSubmit: (answer: string) => void; loading: boolean }> = ({ onSubmit, loading }) => {
   const [answer, setAnswer] = useState("");
+
   const handleSubmit = () => {
-    if (!answer) return;
+    if (!answer.trim()) return;
     onSubmit(answer);
     setAnswer("");
   };
+
   return (
-    <div className="flex gap-2 mt-4">
-      <input
-        type="text"
+    <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mt: 2 }}>
+      <TextField
+        fullWidth
+        multiline
+        minRows={2}
         placeholder="Your answer..."
-        className="flex-1 rounded-lg border-none bg-white/90 dark:bg-background-dark/90 focus:ring-2 focus:ring-primary p-3"
+        variant="outlined"
         value={answer}
         onChange={(e) => setAnswer(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            handleSubmit();
+          }
+        }}
       />
-      <button
-        className="bg-primary text-white font-bold py-3 px-6 rounded-lg hover:bg-primary/90"
-        onClick={handleSubmit}
-        disabled={loading}
-      >
-        {loading ? "Submitting..." : "Send"}
-      </button>
-    </div>
+      <Button variant="contained" color="primary" onClick={handleSubmit} disabled={loading}>
+        {loading ? <CircularProgress size={24} /> : "Send"}
+      </Button>
+    </Stack>
   );
 };
 
