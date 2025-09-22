@@ -18,8 +18,8 @@ const AnswerInput: React.FC<Props> = ({ onSubmit, loading }) => {
     <div className="w-full flex flex-col sm:flex-row gap-2 mt-4">
       <textarea
         className="flex-1 p-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-        rows={2}
-        placeholder="Your answer..."
+        rows={1}
+        placeholder="Ask a follow-up or comment..."
         value={answer}
         onChange={(e) => setAnswer(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}

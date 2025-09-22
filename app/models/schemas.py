@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from datetime import datetime
 
 class QuestionResponse(BaseModel):
@@ -26,7 +26,8 @@ class SessionCreateResponse(BaseModel):
 # Reply
 # -----------------------------
 class SessionReplyRequest(BaseModel):
-    answer: str
+    # Instead of single answer, allow multiple answers
+    answers: List[Dict]  # [{"question": str, "answer": str}]
 
 # -----------------------------
 # Reply
@@ -40,19 +41,28 @@ class SessionReplyResponse(BaseModel):
 # -----------------------------
 # Finalize
 # -----------------------------
+class ComponentDetails(BaseModel):
+    technology_stack: List[str] = []
+    responsibilities: List[str] = []
+
+
 class Component(BaseModel):
     name: str
-    desc: str
+    description: str
+    details: ComponentDetails = ComponentDetails()
+
 
 class FinalizeResponse(BaseModel):
     summary: str
-    components: List[Component]
-    db_schema: str
-    mermaid: str
-    tech_stack: List[str]
-    integration_steps: List[str]
-    rationale: str
-    diagram_url: Optional[str] = None  # optional diagram URL
+    components: List[Component] = []
+    db_schema: Optional[str] = None
+    mermaid: Optional[str] = None
+    tech_stack: List[str] = []
+    integration_steps: List[str] = []
+    rationale: Optional[str] = None
+    diagram_url: Optional[str] = None
+    diagrams: Optional[List[Any]] = None  # e.g. {"system_architecture": "..."}
+
 
 # -----------------------------
 # Session detail

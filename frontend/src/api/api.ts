@@ -22,11 +22,11 @@ export interface SessionReplyResponse {
 export interface FinalizeResponse {
   summary: string;
   components: { name: string; desc: string }[];
-  db_schema: string;
-  mermaid: string;
-  tech_stack: string[];
-  integration_steps: string[];
-  rationale: string;
+  db_schema?: string;
+  mermaid?: string;
+  tech_stack?: string[];
+  integration_steps?: string[];
+  rationale?: string;
   diagram_url?: string; // make it optional
 }
 

@@ -61,7 +61,7 @@ async def create_session(request: SessionCreateRequest):
     now = datetime.utcnow()
 
     # Generate initial questions
-    questions = await llm_service.generate_initial_questions(request.prompt, num_questions=4)
+    questions = await llm_service.generate_initial_questions(request.prompt, conversation=[], num_questions=4)
 
     query = sessions.insert().values(
         id=session_id,
@@ -87,10 +87,11 @@ async def create_session(request: SessionCreateRequest):
 # -----------------------------
 # Reply to session
 # -----------------------------
+# app/api/v1/session.py
 @router.post("/{session_id}/reply", response_model=SessionReplyResponse)
 async def reply_to_session(
-    session_id: str = Path(..., description="ID of the session"),
-    request: SessionReplyRequest = ...,
+    session_id: str,
+    request: SessionReplyRequest
 ):
     query = sessions.select().where(sessions.c.id == session_id)
     session_record = await database.fetch_one(query)
@@ -103,17 +104,21 @@ async def reply_to_session(
     questions: List[str] = data.get("questions") or []
     now = datetime.utcnow()
 
-    next_question = get_next_question(questions, answers)
-    next_qs = []
+    # Track which questions are already answered
+    answered_questions = {a['question'] for a in answers}
 
-    if next_question:
+    # Process all new answers in one request
+    for ans in request.answers:
+        q = ans.get("question")
+        a = ans.get("answer")
+        if not q or not a or q in answered_questions:
+            continue  # Skip invalid or already answered
+
         # Record user answer
-        conversation.append({"role": "user", "text": request.answer})
+        conversation.append({"role": "user", "text": a})
 
         # Build prompt for LLM
-        llm_prompt = f"Question: {next_question}\nUser answer: {request.answer}"
-
-        # Get LLM reply
+        llm_prompt = f"Question: {q}\nUser answer: {a}"
         llm_reply = await llm_service.get_next_reply(llm_prompt, conversation)
         conversation.append({
             "role": "architai",
@@ -122,13 +127,14 @@ async def reply_to_session(
         })
 
         # Record answer
-        answers.append({"question": next_question, "answer": request.answer})
+        answers.append({"question": q, "answer": a})
+        answered_questions.add(q)
 
-        # Determine next question
-        next_qs = get_next_questions_list(questions, answers)
+    # Determine next unanswered questions
+    next_qs = [q for q in questions if q not in answered_questions]
 
     # Update DB
-    status = "in_progress" if len(answers) < len(questions) else "ready_to_finalize"
+    status = "ready_to_finalize" if not next_qs else "in_progress"
     update_query = sessions.update().where(sessions.c.id == session_id).values(
         answers=answers,
         conversation=conversation,
@@ -143,6 +149,7 @@ async def reply_to_session(
         conversation=stringify_meta(conversation),
         updated_at=now
     )
+
 
 
 # -----------------------------
