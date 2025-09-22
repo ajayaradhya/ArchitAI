@@ -1,7 +1,10 @@
-from fastapi import APIRouter, HTTPException, Path
+# app/api/v1/session.py
+import json
 import uuid
-from typing import List, Dict
 from datetime import datetime
+from typing import List, Dict
+
+from fastapi import APIRouter, HTTPException, Path
 
 from app.models.schemas import (
     FinalizeResponse,
@@ -13,40 +16,41 @@ from app.models.schemas import (
 )
 from app.core.db import database
 from app.models.db_models import sessions, SessionStatus
+from app.services import llm_service
 
 router = APIRouter(prefix="/session", tags=["session"])
 
-# -----------------------------
-# Mock data
-# -----------------------------
-MOCK_QUESTIONS = [
-    "How many active users do you expect?",
-    "Do you need real-time delivery?",
-    "Should notifications be persistent?",
-    "What’s your expected peak traffic?",
-]
 
-MOCK_FINAL_DESIGN = {
-    "summary": "A scalable notification system for 10M users with real-time push.",
-    "components": [
-        {"name": "API Gateway", "desc": "Accepts notification requests"},
-        {"name": "Notification Service", "desc": "Validates and enqueues messages"},
-        {"name": "Message Queue (Kafka)", "desc": "Durable queue for fanout"},
-        {"name": "Workers", "desc": "Consume from queue and deliver via push/email"},
-        {"name": "Redis", "desc": "User subscription cache and rate limiting"},
-        {"name": "Postgres", "desc": "Persist user preferences and history"},
-    ],
-    "db_schema": "CREATE TABLE users (...); CREATE TABLE subscriptions (...);",
-    "mermaid": "graph TD; Client-->Gateway; Gateway-->Service; Service-->Kafka; Kafka-->Workers; Workers-->Push;",
-    "tech_stack": ["FastAPI", "Postgres", "Redis", "Kafka", "FCM/APNs"],
-    "integration_steps": [
-        "1. Create Postgres schema",
-        "2. Deploy Kafka cluster",
-        "3. Implement worker pool",
-    ],
-    "rationale": "Chose Kafka for durable fanout; Redis for fast lookups; eventual consistency chosen to favor availability.",
-    "diagram_url": "https://via.placeholder.com/800x400.png?text=High+Level+Diagram"
-}
+# -----------------------------
+# Helpers
+# -----------------------------
+def get_next_question(questions: List[str], answers: List[Dict]) -> str:
+    """Get the next unanswered question."""
+    idx = len(answers)
+    return questions[idx] if idx < len(questions) else None
+
+
+def get_next_questions_list(questions: List[str], answers: List[Dict]) -> List[str]:
+    """Return next question as list if available (for API response)."""
+    next_q = get_next_question(questions, answers)
+    return [next_q] if next_q else []
+
+
+def record_to_dict(record) -> dict:
+    """Convert databases.Record to dict safely for .get() usage."""
+    return dict(record) if record else {}
+
+
+def stringify_meta(conversation: List[Dict]) -> List[Dict]:
+    """Ensure all meta fields are strings to satisfy Pydantic validation."""
+    conv_fixed = []
+    for msg in conversation:
+        msg_copy = msg.copy()
+        if "meta" in msg_copy and not isinstance(msg_copy["meta"], str):
+            msg_copy["meta"] = json.dumps(msg_copy["meta"])
+        conv_fixed.append(msg_copy)
+    return conv_fixed
+
 
 # -----------------------------
 # Create session
@@ -55,10 +59,14 @@ MOCK_FINAL_DESIGN = {
 async def create_session(request: SessionCreateRequest):
     session_id = str(uuid.uuid4())
     now = datetime.utcnow()
+
+    # Generate initial questions
+    questions = await llm_service.generate_initial_questions(request.prompt, num_questions=4)
+
     query = sessions.insert().values(
         id=session_id,
         prompt=request.prompt,
-        questions=MOCK_QUESTIONS.copy(),
+        questions=questions,
         answers=[],
         conversation=[],
         status=SessionStatus.in_progress,
@@ -66,13 +74,15 @@ async def create_session(request: SessionCreateRequest):
         updated_at=now
     )
     await database.execute(query)
+
     return SessionCreateResponse(
         session_id=session_id,
-        questions=MOCK_QUESTIONS,
+        questions=questions,
         conversation=[],
         created_at=now,
         updated_at=now
     )
+
 
 # -----------------------------
 # Reply to session
@@ -87,22 +97,38 @@ async def reply_to_session(
     if not session_record:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Safe access
-    questions: List[str] = session_record["questions"]
-    answers: List[Dict] = session_record["answers"]
-    conversation: List[Dict] = session_record["conversation"] or []
+    data = record_to_dict(session_record)
+    conversation: List[Dict] = data.get("conversation") or []
+    answers: List[Dict] = data.get("answers") or []
+    questions: List[str] = data.get("questions") or []
     now = datetime.utcnow()
 
-    answered_count = len(answers)
-    next_question = questions[answered_count] if answered_count < len(questions) else None
+    next_question = get_next_question(questions, answers)
+    next_qs = []
 
     if next_question:
-        answers.append({"question": next_question, "answer": request.answer})
-        conversation.append({"role": "architai", "text": next_question})
+        # Record user answer
         conversation.append({"role": "user", "text": request.answer})
 
-    status = "in_progress" if answered_count + 1 < len(questions) else "ready_to_finalize"
+        # Build prompt for LLM
+        llm_prompt = f"Question: {next_question}\nUser answer: {request.answer}"
 
+        # Get LLM reply
+        llm_reply = await llm_service.get_next_reply(llm_prompt, conversation)
+        conversation.append({
+            "role": "architai",
+            "text": llm_reply,
+            "meta": json.dumps({"prompt": llm_prompt})
+        })
+
+        # Record answer
+        answers.append({"question": next_question, "answer": request.answer})
+
+        # Determine next question
+        next_qs = get_next_questions_list(questions, answers)
+
+    # Update DB
+    status = "in_progress" if len(answers) < len(questions) else "ready_to_finalize"
     update_query = sessions.update().where(sessions.c.id == session_id).values(
         answers=answers,
         conversation=conversation,
@@ -111,14 +137,13 @@ async def reply_to_session(
     )
     await database.execute(update_query)
 
-    next_qs = [questions[answered_count + 1]] if answered_count + 1 < len(questions) else []
-
     return SessionReplyResponse(
         next_questions=next_qs,
         status=status,
-        conversation=conversation,
+        conversation=stringify_meta(conversation),
         updated_at=now
     )
+
 
 # -----------------------------
 # Finalize session
@@ -130,19 +155,38 @@ async def finalize_session(session_id: str = Path(..., description="ID of the se
     if not session_record:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if len(session_record["answers"]) < len(session_record["questions"]):
+    data = record_to_dict(session_record)
+    answers: List[Dict] = data.get("answers") or []
+    questions: List[str] = data.get("questions") or []
+
+    if len(answers) < len(questions):
         raise HTTPException(status_code=400, detail="Not all questions answered yet")
 
+    conversation: List[Dict] = data.get("conversation") or []
+    prompt: str = data["prompt"]
     now = datetime.utcnow()
 
+    # Generate final design
+    final_design = await llm_service.generate_final_design(prompt, conversation)
+
+    # Log in conversation
+    conversation.append({
+        "role": "architai",
+        "text": str(final_design),
+        "meta": json.dumps({"prompt": prompt})
+    })
+
+    # Update DB
     update_query = sessions.update().where(sessions.c.id == session_id).values(
-        final_design=MOCK_FINAL_DESIGN,
+        final_design=final_design,
+        conversation=conversation,
         status=SessionStatus.completed,
         updated_at=now
     )
     await database.execute(update_query)
 
-    return MOCK_FINAL_DESIGN
+    return final_design
+
 
 # -----------------------------
 # List all sessions
@@ -150,16 +194,24 @@ async def finalize_session(session_id: str = Path(..., description="ID of the se
 @router.get("/", response_model=List[SessionCreateResponse])
 async def list_sessions():
     all_sessions = await database.fetch_all(sessions.select())
-    return [
-        SessionCreateResponse(
-            session_id=s["id"],
-            questions=s["questions"] if s["status"] == SessionStatus.in_progress else [],
-            conversation=s["conversation"] or [],
-            created_at=s["created_at"],
-            updated_at=s["updated_at"]
+    response_list = []
+
+    for record in all_sessions:
+        s = record_to_dict(record)
+        conv_fixed = stringify_meta(s.get("conversation") or [])
+
+        response_list.append(
+            SessionCreateResponse(
+                session_id=s["id"],
+                questions=s["questions"] if s["status"] == SessionStatus.in_progress else [],
+                conversation=conv_fixed,
+                created_at=s["created_at"],
+                updated_at=s["updated_at"]
+            )
         )
-        for s in all_sessions
-    ]
+
+    return response_list
+
 
 # -----------------------------
 # Get session detail
@@ -171,16 +223,17 @@ async def get_session(session_id: str = Path(..., description="ID of the session
     if not session_record:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    conversation: List[Dict] = session_record["conversation"] or []
+    data = record_to_dict(session_record)
+    conversation: List[Dict] = stringify_meta(data.get("conversation") or [])
 
     return SessionDetailResponse(
-        session_id=session_record["id"],
-        prompt=session_record["prompt"],
-        questions=session_record["questions"],
-        answers=session_record["answers"],
-        status=session_record["status"],
-        final_design=session_record["final_design"],
+        session_id=data["id"],
+        prompt=data["prompt"],
+        questions=data.get("questions") or [],
+        answers=data.get("answers") or [],
+        status=data["status"],
+        final_design=data.get("final_design"),
         conversation=conversation,
-        created_at=session_record["created_at"],
-        updated_at=session_record["updated_at"],
+        created_at=data["created_at"],
+        updated_at=data["updated_at"],
     )
